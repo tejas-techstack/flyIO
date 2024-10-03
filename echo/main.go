@@ -1,3 +1,10 @@
+/*
+
+This code is part of the demo 
+from maelstrom and is not self-authored
+
+*/
+
 package main
 
 import (

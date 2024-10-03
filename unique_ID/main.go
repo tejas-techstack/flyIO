@@ -1,3 +1,10 @@
+/*
+
+Date: 2/10/2024
+Author: Tejas Ramakrishnan
+
+*/
+
 package main
 
 import (
@@ -12,6 +19,7 @@ import (
 func main(){
   n := maelstrom.NewNode()
 
+  // Create handler for generate
   n.Handle("generate", func(msg maelstrom.Message) error {
     var body map[string]any
     if err := json.Unmarshal(msg.Body, &body); err != nil{
@@ -28,9 +36,11 @@ func main(){
     body["type"] = "generate_ok"
     body["id"] = fmt.Sprintf("%v%v", msg.Dest, body["msg_id"])
 
+    // reply with updated body
     return n.Reply(msg, body)
   })
-
+  
+  // run the node
   if err := n.Run(); err != nil {
     log.Fatal(err)
   }
