@@ -86,6 +86,7 @@ func main(){
   })
 
   n.Handle("read", func(msg maelstrom.Message) error {
+    log.Println(msg)
     var body map[string]any
 
     if err := json.Unmarshal(msg.Body, &body); err != nil{
