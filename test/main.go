@@ -1,144 +1,88 @@
+// TODO implementing Gossip protocol.
+
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"log"
-	"sync"
+  "encoding/json"
+  //"context"
+  "log"
+  "os"
+  //"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-func main() {
-	n := maelstrom.NewNode()
-	br := newBroadcaster(n, 10)
-	defer br.close()
-	s := &server{n: n, nodeID: n.ID(), ids: make(map[int]struct{}), br: br}
-
-	n.Handle("broadcast", s.broadcastHandler)
-	n.Handle("read", s.readHandler)
-	n.Handle("topology", s.topologyHandler)
-
-	if err := n.Run(); err != nil {
-		log.Fatal(err)
-	}
+type server struct{
+  n *maelstrom.Node;
+  store []any;
 }
 
-type server struct {
-	n      *maelstrom.Node
-	nodeID string
-	br     *broadcaster
+type anymap map[string]any
 
-	idsMu sync.RWMutex
-	ids   map[int]struct{}
+func main(){
+  s := server{};
+  s.n = maelstrom.NewNode()
+
+  // log.Println(s)
+
+  s.n.Handle("topology", s.topology);
+  s.n.Handle("read", s.read);
+  s.n.Handle("broadcast", s.broadcast);
+  s.n.Handle("unicast", s.unicast);
+
+  if err := s.n.Run(); err != nil{
+    log.Println("Run Error: ", err)
+    os.Exit(1)
+  }
 }
 
-func (s *server) broadcastHandler(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		return err
-	}
+func unmarshalJSON(msg maelstrom.Message) (map[string]any, error) {
+  var body anymap
 
-	id := int(body["message"].(float64))
-	s.idsMu.Lock()
-	if _, exists := s.ids[id]; exists {
-		s.idsMu.Unlock()
-		return nil
-	}
-	s.ids[id] = struct{}{}
-	s.idsMu.Unlock()
+  if err := json.Unmarshal(msg.Body, &body); err != nil{
+    return nil, err
+  }
 
-	if err := s.broadcast(msg.Src, body); err != nil {
-		return err
-	}
-
-	return s.n.Reply(msg, map[string]any{
-		"type": "broadcast_ok",
-	})
+  return body, nil
 }
 
-func (s *server) broadcast(src string, body map[string]any) error {
-	for _, dst := range s.n.NodeIDs() {
-		if dst == src || dst == s.nodeID {
-			continue
-		}
-
-		s.br.broadcast(broadcastMsg{
-			dst:  dst,
-			body: body,
-		})
-	}
-	return nil
+func (s * server) topology(msg maelstrom.Message) error {
+  return s.n.Reply(msg, anymap{"type":"topology_ok",});
 }
 
-func (s *server) readHandler(msg maelstrom.Message) error {
-	ids := s.getAllIDs()
-
-	return s.n.Reply(msg, map[string]any{
-		"type":     "read_ok",
-		"messages": ids,
-	})
+func (s * server) read(msg maelstrom.Message) error {
+  return s.n.Reply(msg, anymap{"type": "read_ok","messages":s.store})
 }
 
-func (s *server) getAllIDs() []int {
-	s.idsMu.RLock()
-	ids := make([]int, 0, len(s.ids))
-	for id := range s.ids {
-		ids = append(ids, id)
-	}
-	s.idsMu.RUnlock()
+func (s *server) broadcast(msg maelstrom.Message) error {
+  body, err := unmarshalJSON(msg)
+  if err != nil {
+    return err
+  }
 
-	return ids
+  message := body["message"]
+  s.store = append(s.store, message)
+
+  log.Println(s.n.NodeIDs())
+  for _, node := range s.n.NodeIDs() {
+    if node == s.n.ID() {
+      continue
+    }
+
+    // log.Printf("%v, %T\n", node, node)
+    s.n.Send(node, anymap{"type": "unicast", "message":body["message"],})
+  }
+
+  return s.n.Reply(msg, anymap{"type": "broadcast_ok"})
 }
 
-func (s *server) topologyHandler(msg maelstrom.Message) error {
-	return s.n.Reply(msg, map[string]any{
-		"type": "topology_ok",
-	})
+func (s * server) unicast(msg maelstrom.Message) error {
+  body, err := unmarshalJSON(msg)
+  if err != nil {
+    return err
+  }
+  s.store = append(s.store, body["message"])
+
+  return nil
 }
 
-type broadcastMsg struct {
-	dst  string
-	body map[string]any
-}
-
-type broadcaster struct {
-	cancel context.CancelFunc
-	ch     chan broadcastMsg
-}
-
-func newBroadcaster(n *maelstrom.Node, worker int) *broadcaster {
-	ch := make(chan broadcastMsg)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	for i := 0; i < worker; i++ {
-		go func() {
-			for {
-				select {
-				case msg := <-ch:
-					for {
-						if err := n.Send(msg.dst, msg.body); err != nil {
-							continue
-						}
-						break
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-	return &broadcaster{
-		ch:     ch,
-		cancel: cancel,
-	}
-}
-
-func (b *broadcaster) broadcast(msg broadcastMsg) {
-	b.ch <- msg
-}
-
-func (b *broadcaster) close() {
-	b.cancel()
-}
