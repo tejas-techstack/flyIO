@@ -1,2 +1,4 @@
 maelstrom/
 test/
+*/tmp*
+*/store/
